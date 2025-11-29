@@ -1,12 +1,24 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { MapPin, Play, Pause } from "lucide-react"
+import Map, { Marker } from "react-map-gl"
 import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Slider } from "@/components/ui/slider"
 import { birdDetections, uniqueSpecies, timeRange } from "@/lib/bird-data"
+
+const SPECIES_COLORS: Record<string, string> = {
+  "Pacific Wren": "#e41a1c",
+  "Pacific-slope Flycatcher": "#377eb8",
+  "Golden-crowned Kinglet": "#4daf4a",
+  "American Robin": "#984ea3",
+  "Swainson's Thrush": "#ff7f00",
+  "Wilson's Warbler": "#a65628",
+}
+
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN as string
 
 export function BirdDetectionMap() {
   const [selectedSpecies, setSelectedSpecies] = useState<string>("all")
@@ -28,21 +40,28 @@ export function BirdDetectionMap() {
   }
 
   // Simple effect for playback
-  useMemo(() => {
-    if (isPlaying) {
-      const interval = setInterval(() => {
-        setTimeValue((prev) => {
-          const newValue = prev[0] + (timeRange.max - timeRange.min) / 100
-          if (newValue >= timeRange.max) {
-            setIsPlaying(false)
-            return [timeRange.max]
-          }
-          return [newValue]
-        })
-      }, 100)
-      return () => clearInterval(interval)
-    }
+  useEffect(() => {
+    if (!isPlaying) return
+
+    const interval = setInterval(() => {
+      setTimeValue((prev) => {
+        const newValue = prev[0] + (timeRange.max - timeRange.min) / 100
+        if (newValue >= timeRange.max) {
+          setIsPlaying(false)
+          return [timeRange.max]
+        }
+        return [newValue]
+      })
+    }, 100)
+
+    return () => clearInterval(interval)
   }, [isPlaying])
+
+  // Study area bounding box (based on your real data)
+  const minLat = 46.35
+  const maxLat = 46.43
+  const minLon = -123.95
+  const maxLon = -123.87
 
   const formatDate = (timestamp: number) => {
     return new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
@@ -105,64 +124,57 @@ export function BirdDetectionMap() {
           </div>
         </div>
       </Card>
-
+      
       {/* Map Visualization */}
       <Card className="p-6">
-        <div className="relative w-full h-[600px] bg-muted/30 rounded-lg overflow-hidden">
-          {/* Map Grid Background */}
-          <div className="absolute inset-0 opacity-20">
-            <svg width="100%" height="100%">
-              <defs>
-                <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                  <path d="M 40 0 L 0 0 0 40" fill="none" stroke="currentColor" strokeWidth="0.5" />
-                </pattern>
-              </defs>
-              <rect width="100%" height="100%" fill="url(#grid)" />
-            </svg>
-          </div>
-
-          {/* Detection Markers */}
-          {filteredDetections.map((detection) => {
-            // Normalize coordinates to fit within container (simple projection)
-            const x = ((detection.longitude + 74.006) / 0.05) * 100 // Rough normalization
-            const y = ((40.8 - detection.latitude) / 0.1) * 100
-
-            return (
-              <div
+        <div className="relative w-full h-[600px] rounded-lg overflow-hidden">
+          {/* Mapbox Map */}
+          <Map
+            mapboxAccessToken={MAPBOX_TOKEN}
+            initialViewState={{
+              latitude: (minLat + maxLat) / 2,
+              longitude: (minLon + maxLon) / 2,
+              zoom: 11,
+            }}
+            minZoom={9}
+            maxZoom={14}
+            style={{ width: "100%", height: "100%" }}
+            mapStyle="mapbox://styles/mapbox/outdoors-v12"
+          >
+            {/* Markers */}
+            {filteredDetections.map((detection) => (
+              <Marker
                 key={detection.id}
-                className="absolute group"
-                style={{
-                  left: `${Math.min(Math.max(x, 5), 95)}%`,
-                  top: `${Math.min(Math.max(y, 5), 95)}%`,
-                  transform: "translate(-50%, -50%)",
-                }}
+                latitude={detection.latitude}
+                longitude={detection.longitude}
+                anchor="bottom"
               >
-                <div className="relative">
-                  <MapPin
-                    className="h-6 w-6 text-primary drop-shadow-lg animate-in fade-in zoom-in duration-300"
-                    fill="currentColor"
-                  />
+                <MapPin
+                  className="h-6 w-6 drop-shadow-lg"
+                  style={{ color: SPECIES_COLORS[detection.species] ?? "#0f766e" }}
+                  fill="currentColor"
+                />
+              </Marker>
+            ))}
+          </Map>
 
-                  {/* Tooltip */}
-                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-popover text-popover-foreground rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-10 border">
-                    <p className="font-semibold text-sm">{detection.species}</p>
-                    <p className="text-xs text-muted-foreground">{detection.datetime}</p>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-
-          {/* Legend */}
+          {/* Legend overlay */}
           <div className="absolute bottom-4 left-4 bg-card p-4 rounded-lg shadow-lg border">
-            <p className="text-sm font-semibold mb-2">Map Legend</p>
-            <div className="flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-primary" fill="currentColor" />
-              <span className="text-xs text-muted-foreground">Bird Detection</span>
+            <p className="text-sm font-semibold mb-2">Species Legend</p>
+            <div className="space-y-1">
+              {uniqueSpecies.map((species) => (
+                <div key={species} className="flex items-center gap-2">
+                  <span
+                    className="inline-block w-3 h-3 rounded-full"
+                    style={{ backgroundColor: SPECIES_COLORS[species] ?? "#6b7280" }}
+                  />
+                  <span className="text-xs text-muted-foreground">{species}</span>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Info */}
+          {/* Info overlay */}
           <div className="absolute top-4 right-4 bg-card p-4 rounded-lg shadow-lg border max-w-xs">
             <p className="text-xs text-muted-foreground">
               Hover over markers to view detection details. Use the timeline to see how detections change over time.
